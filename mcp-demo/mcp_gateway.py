@@ -1,7 +1,8 @@
 """
-Module 3 — MCP Security Gateway
-================================
+Module 3 — MCP Security Gateway (v2)
+======================================
 A security gateway that wraps MCP tools with:
+  - Token-based authentication (only valid tokens pass through)
   - Access logging (who called what, when)
   - Data masking / desensitization (phone, email, ID numbers)
   - Output safety detection (flag suspicious content)
@@ -23,6 +24,26 @@ from mcp.server.fastmcp import FastMCP
 API_BASE = "http://127.0.0.1:8001"
 LOG_FILE = Path(__file__).parent / "gateway_access.log"
 
+# ── Token Authentication ─────────────────────────────────────
+# Tokens act as simple shared secrets. In production, replace with
+# JWT / OAuth / MCP session context.
+VALID_TOKENS = {
+    "demo-token-2026": "standard",
+    "admin-token-2026": "admin",
+}
+
+TOKEN_DISPLAY = {
+    "demo-token-2026": "Demo Token（标准权限）",
+    "admin-token-2026": "Admin Token（管理员权限）",
+}
+
+TOKEN_HINT = (
+    "Token 认证：所有工具需传入 token 参数。\n"
+    f"  有效 Token: {', '.join(VALID_TOKENS.keys())}\n"
+    "  示例: get_user_info_safe(token='demo-token-2026', user_id='u001')"
+)
+
+
 # ── Logging Setup ──────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -33,6 +54,20 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("mcp-gateway")
+
+
+def verify_token(token: str) -> str | None:
+    """
+    验证 token 是否有效。
+    返回 None 表示无效；返回 token 级别名称（如 'standard', 'admin'）表示有效。
+    """
+    level = VALID_TOKENS.get(token)
+    if level is None:
+        logger.warning(f"[认证失败] 无效 token (前缀: {token[:6]}...)")
+        return None
+    role = TOKEN_DISPLAY.get(token, token)
+    logger.info(f"[认证成功] token={role}, 级别={level}")
+    return level
 
 
 # ── Security Functions ─────────────────────────────────────
@@ -90,7 +125,7 @@ def check_output_safety(text: str) -> list[str]:
 
 mcp = FastMCP(
     "demo-security-gateway",
-    instructions="MCP 安全网关 — 包装 API 并添加日志、脱敏、安全检测",
+    instructions="MCP 安全网关 — 认证 + 日志 + 脱敏 + 安全检测\n\n" + TOKEN_HINT,
 )
 
 
@@ -100,18 +135,20 @@ def _api_get(path: str):
     return resp.json()
 
 
-@mcp.tool()
-def get_user_info_safe(user_id: str) -> str:
-    """【安全网关】查询用户信息（已脱敏处理，自动记录日志）"""
-    logger.info(f"工具调用: get_user_info_safe(user_id='{user_id}')")
+def _auth_err(token: str) -> str:
+    """返回认证失败的 JSON 错误。"""
+    err = {
+        "error": "unauthorized",
+        "message": "无效的 token，请使用有效 Token",
+        "hint": list(VALID_TOKENS.keys()),
+    }
+    return json.dumps(err, ensure_ascii=False)
 
-    raw = _api_get(f"/api/users/{user_id}")
+
+def _process_and_return(raw, tool_name: str) -> str:
+    """对原始响应执行脱敏+检测+日志，返回处理后的字符串。"""
     raw_str = json.dumps(raw, ensure_ascii=False)
-
-    # 1. 脱敏处理
     masked = mask_sensitive(raw_str)
-
-    # 2. 安全检测
     warnings = check_output_safety(masked)
 
     logger.info(f"响应大小: {len(masked)} 字符")
@@ -125,21 +162,37 @@ def get_user_info_safe(user_id: str) -> str:
 
 
 @mcp.tool()
-def get_order_info_safe(order_id: str) -> str:
-    """【安全网关】查询订单信息"""
-    logger.info(f"工具调用: get_order_info_safe(order_id='{order_id}')")
-    raw = _api_get(f"/api/orders/{order_id}")
-    raw_str = json.dumps(raw, ensure_ascii=False)
-    masked = mask_sensitive(raw_str)
-    warnings = check_output_safety(masked)
-    logger.info(f"响应大小: {len(masked)} 字符 | 告警数: {len(warnings)}")
-    return masked
+def get_user_info_safe(token: str, user_id: str) -> str:
+    """【安全网关】查询用户信息（需 Token 认证，已脱敏处理）"""
+    logger.info(f"工具调用: get_user_info_safe(user_id='{user_id}')")
+
+    if verify_token(token) is None:
+        return _auth_err(token)
+
+    raw = _api_get(f"/api/users/{user_id}")
+    return _process_and_return(raw, "get_user_info_safe")
 
 
 @mcp.tool()
-def get_weather_safe(city: str) -> str:
-    """【安全网关】查询天气（几乎无敏感信息，用于对比测试）"""
+def get_order_info_safe(token: str, order_id: str) -> str:
+    """【安全网关】查询订单信息（需 Token 认证）"""
+    logger.info(f"工具调用: get_order_info_safe(order_id='{order_id}')")
+
+    if verify_token(token) is None:
+        return _auth_err(token)
+
+    raw = _api_get(f"/api/orders/{order_id}")
+    return _process_and_return(raw, "get_order_info_safe")
+
+
+@mcp.tool()
+def get_weather_safe(token: str, city: str) -> str:
+    """【安全网关】查询天气（需 Token 认证，几乎无敏感信息）"""
     logger.info(f"工具调用: get_weather_safe(city='{city}')")
+
+    if verify_token(token) is None:
+        return _auth_err(token)
+
     raw = _api_get(f"/api/weather/{city}")
     result = json.dumps(raw, ensure_ascii=False)
     logger.info(f"响应: {result}")
@@ -147,40 +200,45 @@ def get_weather_safe(city: str) -> str:
 
 
 @mcp.tool()
-def search_safe(keyword: str) -> str:
-    """【安全网关】综合搜索"""
+def search_safe(token: str, keyword: str) -> str:
+    """【安全网关】综合搜索（需 Token 认证）"""
     logger.info(f"工具调用: search_safe(keyword='{keyword}')")
+
+    if verify_token(token) is None:
+        return _auth_err(token)
+
     raw = _api_get(f"/api/search?q={keyword}")
-    raw_str = json.dumps(raw, ensure_ascii=False)
-    masked = mask_sensitive(raw_str)
-    warnings = check_output_safety(masked)
-    return masked
+    return _process_and_return(raw, "search_safe")
 
 
 @mcp.tool()
-def get_user_orders_safe(user_id: str) -> str:
-    """【安全网关】查询用户订单列表"""
+def get_user_orders_safe(token: str, user_id: str) -> str:
+    """【安全网关】查询用户订单列表（需 Token 认证）"""
     logger.info(f"工具调用: get_user_orders_safe(user_id='{user_id}')")
+
+    if verify_token(token) is None:
+        return _auth_err(token)
+
     raw = _api_get(f"/api/orders/by-user/{user_id}")
-    raw_str = json.dumps(raw, ensure_ascii=False)
-    masked = mask_sensitive(raw_str)
-    warnings = check_output_safety(masked)
-    return masked
+    return _process_and_return(raw, "get_user_orders_safe")
 
 
 if __name__ == "__main__":
-    print("=" * 55)
-    print("  MCP 安全网关 — demo-security-gateway")
+    print("=" * 60)
+    print("  MCP 安全网关 v2 — demo-security-gateway")
     print(f"  日志文件: {LOG_FILE}")
     print(f"  后端 API: {API_BASE}")
-    print("=" * 55)
+    print("=" * 60)
     print()
-    print(f"已注册的已脱敏工具:")
-    print(f"  - get_user_info_safe(user_id)   — 用户查询 (脱敏)")
-    print(f"  - get_order_info_safe(order_id) — 订单查询 (脱敏)")
-    print(f"  - get_weather_safe(city)        — 天气查询 (明文)")
-    print(f"  - search_safe(keyword)          — 综合搜索 (脱敏)")
-    print(f"  - get_user_orders_safe(user_id) — 用户订单 (脱敏)")
+    print("  🔐 Token 认证已启用!")
+    print(f"  有效 Token: {', '.join(VALID_TOKENS.keys())}")
+    print()
+    print("  已注册的已脱敏工具 (需 token 参数):")
+    print(f"  - get_user_info_safe(token, user_id)   — 用户查询")
+    print(f"  - get_order_info_safe(token, order_id) — 订单查询")
+    print(f"  - get_weather_safe(token, city)        — 天气查询")
+    print(f"  - search_safe(token, keyword)          — 综合搜索")
+    print(f"  - get_user_orders_safe(token, user_id) — 用户订单")
     print()
 
     if "--sse" in sys.argv:

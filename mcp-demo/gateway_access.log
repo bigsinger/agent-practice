@@ -1,5 +1,17 @@
-2026-05-22 14:31:54,357 | INFO  | Processing request of type CallToolRequest
-2026-05-22 14:31:54,358 | INFO  | 工具调用: get_user_info_safe(user_id='u001')
-2026-05-22 14:31:54,404 | INFO  | HTTP Request: GET http://127.0.0.1:8001/api/users/u001 "HTTP/1.0 200 OK"
-2026-05-22 14:31:54,404 | INFO  | 响应大小: 122 字符
-2026-05-22 14:31:54,405 | INFO  | 安全检查: 通过
+2026-05-22 14:47:17,706 | INFO  | [认证成功] token=Demo Token（标准权限）, 级别=standard
+2026-05-22 14:47:17,707 | INFO  | [认证成功] token=Admin Token（管理员权限）, 级别=admin
+2026-05-22 14:47:17,707 | WARNING | [认证失败] 无效 token (前缀: wrong-...)
+2026-05-22 14:47:17,708 | WARNING | [认证失败] 无效 token (前缀: ...)
+2026-05-22 14:47:17,708 | WARNING | [认证失败] 无效 token (前缀:    dem...)
+2026-05-22 14:47:17,709 | INFO  | 工具调用: get_user_info_safe(user_id='u001')
+2026-05-22 14:47:17,709 | WARNING | [认证失败] 无效 token (前缀: wrong-...)
+2026-05-22 14:47:17,710 | INFO  | 工具调用: get_user_info_safe(user_id='u001')
+2026-05-22 14:47:17,710 | INFO  | [认证成功] token=Demo Token（标准权限）, 级别=standard
+2026-05-22 14:47:17,768 | INFO  | HTTP Request: GET http://127.0.0.1:8001/api/users/u001 "HTTP/1.0 200 OK"
+2026-05-22 14:47:17,769 | INFO  | 响应大小: 122 字符
+2026-05-22 14:47:17,769 | INFO  | 安全检查: 通过
+2026-05-22 14:47:17,770 | INFO  | 工具调用: get_order_info_safe(order_id='ord001')
+2026-05-22 14:47:17,770 | INFO  | [认证成功] token=Admin Token（管理员权限）, 级别=admin
+2026-05-22 14:47:17,793 | INFO  | HTTP Request: GET http://127.0.0.1:8001/api/orders/ord001 "HTTP/1.0 200 OK"
+2026-05-22 14:47:17,794 | INFO  | 响应大小: 121 字符
+2026-05-22 14:47:17,794 | INFO  | 安全检查: 通过

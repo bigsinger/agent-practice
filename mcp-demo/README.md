@@ -84,23 +84,25 @@ mcp-demo/
 
 | 安全功能 | 实现 | 说明 |
 |----------|------|------|
-| **访问日志** | `logging` → `gateway_access.log` | 记录每次工具调用的时间、参数、响应大小 |
-| **数据脱敏** | `mask_sensitive()` | 自动掩码手机号 (`138****8001`)、邮箱前缀、身份证号 |
+| **Token 认证** | `verify_token()` | 每个工具需传入有效 token，拒绝未授权请求 |
+| **访问日志** | `logging` → `gateway_access.log` | 记录每次工具调用的时间、参数、认证状态、响应大小 |
+| **数据脱敏** | `mask_sensitive()` | 自动掩码手机号 (`138****8888`)、邮箱前缀、身份证号 |
 | **输出检测** | `check_output_safety()` | 扫描返回内容中是否仍有敏感信息泄露 |
-| **告警上报** | `logger.warning()` | 检测到风险时在日志中标记告警 |
+| **告警上报** | `logger.warning()` | 认证失败 / 泄露风险时在日志中标记告警 |
 
-每个工具在原始名称后加 `_safe` 后缀以示区分（如 `get_user_info_safe`）：
+每个工具在原始名称后加 `_safe` 后缀以示区分（如 `get_user_info_safe`），且新增 `token` 参数：
 
 | 安全工具 | 对应原始工具 | 差异 |
 |----------|-------------|------|
-| `get_user_info_safe` | `get_user_info` | ✅ 脱敏 + ✅ 检测 |
-| `get_order_info_safe` | `get_order_info` | ✅ 脱敏 + ✅ 检测 |
-| `get_weather_safe` | `get_weather` | 无敏感信息，仅日志 |
-| `search_safe` | `search` | ✅ 脱敏 + ✅ 检测 |
-| `get_user_orders_safe` | `get_user_orders` | ✅ 脱敏 + ✅ 检测 |
+| `get_user_info_safe(token, user_id)` | `get_user_info` | ✅ 认证 + ✅ 脱敏 + ✅ 检测 |
+| `get_order_info_safe(token, order_id)` | `get_order_info` | ✅ 认证 + ✅ 脱敏 + ✅ 检测 |
+| `get_weather_safe(token, city)` | `get_weather` | ✅ 认证，无敏感信息，仅日志 |
+| `search_safe(token, keyword)` | `search` | ✅ 认证 + ✅ 脱敏 + ✅ 检测 |
+| `get_user_orders_safe(token, user_id)` | `get_user_orders` | ✅ 认证 + ✅ 脱敏 + ✅ 检测 |
 
 **学习要点**：
 - MCP 网关模式：在工具调用前后插入安全处理逻辑
+- Token 认证：每个工具函数增加 `token` 参数，调用前验证，拒绝未授权请求
 - 脱敏 vs 阻断：脱敏保留数据结构，阻断则返回错误阻止调用
 - 安全检测可以是正则、AI 模型、或外部检查服务
 
@@ -199,11 +201,14 @@ hermes chat
 
 在 chat 中提问：
 
-```
+```text
 用 demo-api-wrapper 查询用户 u001 的信息
-用 demo-security-gateway 查询用户 u001 的信息
-分别用两个 MCP 服务查询用户 u003，对比返回结果有何不同
+用 demo-security-gateway 查询用户 u001 的信息（token: demo-token-2026）
+用错误的 token 查询用户 u003，看看会返回什么
+用 admin-token-2026 查询订单 ord001
 ```
+
+> **注意**：安全网关的每个工具都需要传入 `token` 参数。Hermes Agent 的 LLM 会根据工具 Schema 自动识别参数并填入。如果提问时未提供 token，LLM 可能会询问你要使用哪个 token。
 
 ---
 
@@ -300,10 +305,67 @@ curl http://127.0.0.1:8001/api/users/u001
 2026-05-22 14:31:54 | INFO | 安全检查: 通过
 ```
 
-### 5. 对比总结
+### 5. Token 认证测试（v2 新增）
+
+网关 v2 要求每次工具调用必须携带有效 Token。
+
+**有效 Token 列表**：
+
+| Token | 级别 | 说明 |
+|-------|------|------|
+| `demo-token-2026` | standard | 标准权限 Demo |
+| `admin-token-2026` | admin | 管理员权限 |
+
+**场景 A — 无效 Token（拒绝）**：
+
+```json
+// 调用: get_user_info_safe(token="wrong-token", user_id="u001")
+{
+  "error": "unauthorized",
+  "message": "无效的 token，请使用有效 Token",
+  "hint": ["demo-token-2026", "admin-token-2026"]
+}
+```
+
+**场景 B — 有效 Token（放行+脱敏）**：
+
+```json
+// 调用: get_user_info_safe(token="demo-token-2026", user_id="u001")
+{
+  "id": "u001",
+  "name": "张三",
+  "phone": "138****8888",          ✅ 脱敏
+  "email": "z****@internal.com"    ✅ 脱敏
+}
+```
+
+**场景 C — Admin Token 查询订单**：
+
+```json
+// 调用: get_order_info_safe(token="admin-token-2026", order_id="ord001")
+{
+  "id": "ord001",
+  "user_id": "u001",
+  "product": "MCP Server Pro",
+  "amount": 2999.0,
+  "status": "已支付",
+  "date": "2026-05-20"
+}
+```
+
+**网关日志中的认证记录**：
+
+```log
+WARNING | [认证失败] 无效 token (前缀: wrong-...)
+INFO    | [认证成功] token=Demo Token（标准权限）, 级别=standard
+INFO    | [认证成功] token=Admin Token（管理员权限）, 级别=admin
+```
+
+### 6. 对比总结（v2）
 
 | 对比维度 | API Service | demo-api-wrapper | demo-security-gateway |
 |----------|-------------|------------------|-----------------------|
+| Token 认证 | ❌ 无认证 | ❌ 无认证 | ✅ 需有效 Token |
 | 手机号 | 明文 | 明文透传 | `138****8888` 脱敏 |
 | 邮箱 | 明文 | 明文透传 | `z****@internal.com` 脱敏 |
 | 调用日志 | ❌ 默认静默 | ❌ 默认静默 | ✅ 记入 `gateway_access.log` |
@@ -344,10 +406,14 @@ curl http://127.0.0.1:8001/api/users/u001
 
 1. **新增数据源**：在 `api_service.py` 中新增模拟数据（如产品目录、工单），并在 MCP 中注册对应工具
 
-2. **添加身份验证**：在安全网关中增加 API Key 验证，只有携带正确 Key 的请求才放行
+2. ~~添加身份验证~~ ✅ **已在 v2 中实现**：安全网关已集成 Token 认证机制。可进一步尝试：
+   - 将 Token 改为 JWT 格式，验证签名而非简单字符串匹配
+   - 实现 Token 级别权限控制（如 standard 级别不能查询订单金额，仅 admin 可查）
+   - 实现 Token 过期机制（`exp` 字段）
+   - 将 Token 通过 MCP 的 `capabilities` 或 `initialization` 阶段注入，而非每个工具参数传入
 
-3. **添加阻断机制**：当安全检测发现高危内容时，**阻断返回**并返回错误信息而非脱敏数据
+3. **添加阻断机制**：当安全检测发现高危内容时（如 Token 被滥用、脱敏逻辑失效），**阻断返回**并返回错误信息而非脱敏数据
 
-4. **改成 SSE 模式**：用 `python mcp_gateway.py --sse` 启动 SSE 模式，在浏览器中观察 MCP Server 的实时日志
+4. **改成 SSE 模式**：用 `python mcp_server.py --sse` 或 `python mcp_gateway.py --sse` 启动 SSE 模式，在浏览器中观察 MCP Server 的实时日志
 
 5. **资源（Resource）和提示（Prompt）**：研究 MCP 的 Resource 和 Prompt 概念，在本项目中添加 `@mcp.resource()` 和 `@mcp.prompt()` 演示
