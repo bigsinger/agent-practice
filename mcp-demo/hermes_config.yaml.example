@@ -1,0 +1,33 @@
+# ── Hermes Agent MCP Server 配置示例 ──
+# 将此内容添加到 ~/.hermes/config.yaml 的 mcp_servers 段
+# （新版 Hermes 使用顶层键 mcp_servers:，而非 mcp.servers:）
+#
+# 注意：路径请使用 WSL 绝对路径（/mnt/...）
+#
+# 两个服务器二选一，或同时启用：
+#   - demo-api-wrapper:       无安全措施的原始 MCP 包装
+#   - demo-security-gateway:  含日志+脱敏+检测的安全网关
+
+mcp_servers:
+  # ── 方案 A：直接 MCP 包装（无安全措施）──
+  demo-api-wrapper:
+    command: python
+    args:
+      - /mnt/f/bigsinger/agent-practice/mcp-demo/mcp_server.py
+    enabled: true
+
+  # ── 方案 B：安全网关版（推荐用于演示）──
+  demo-security-gateway:
+    command: python
+    args:
+      - /mnt/f/bigsinger/agent-practice/mcp-demo/mcp_gateway.py
+    enabled: true
+
+# 配置添加后，通过 CLI 注册:
+#   hermes mcp add demo-api-wrapper --command python \
+#     --args /mnt/f/bigsinger/agent-practice/mcp-demo/mcp_server.py
+#   hermes mcp add demo-security-gateway --command python \
+#     --args /mnt/f/bigsinger/agent-practice/mcp-demo/mcp_gateway.py
+#
+# 验证:
+#   hermes mcp list

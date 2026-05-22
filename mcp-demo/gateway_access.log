@@ -1,0 +1,5 @@
+2026-05-22 14:31:54,357 | INFO  | Processing request of type CallToolRequest
+2026-05-22 14:31:54,358 | INFO  | 工具调用: get_user_info_safe(user_id='u001')
+2026-05-22 14:31:54,404 | INFO  | HTTP Request: GET http://127.0.0.1:8001/api/users/u001 "HTTP/1.0 200 OK"
+2026-05-22 14:31:54,404 | INFO  | 响应大小: 122 字符
+2026-05-22 14:31:54,405 | INFO  | 安全检查: 通过
