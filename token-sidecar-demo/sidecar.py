@@ -37,9 +37,11 @@ VAULT_URL = "http://localhost:28001"
 
 ROUTES = {
     "/api-a": {"upstream": "http://localhost:28100", "audience": "api-a",
-               "scope": "read:users", "service_name": "API-A (User Service)"},
+               "scope": "read:users", "service_name": "API-A (User Service)",
+               "require_perm": "emp:read"},
     "/api-b": {"upstream": "http://localhost:28200", "audience": "api-b",
-               "scope": "read:orders", "service_name": "API-B (Order Service)"},
+               "scope": "read:orders", "service_name": "API-B (Order Service)",
+               "require_perm": "order:read"},
 }
 
 WORKLOAD_ID = "sidecar-prod-01"
@@ -83,21 +85,26 @@ async def _ensure_vault_token() -> str:
 
 
 # ---------------------------------------------------------------------------
-# 用户会话验证
+# 统一令牌查验（用户会话 / Agent 令牌）
 # ---------------------------------------------------------------------------
-async def _verify_user_session(session_token: str | None) -> dict:
-    """向 IAM 验证用户会话"""
-    if not session_token:
+async def _introspect_token(bearer_token: str | None) -> dict | None:
+    """调 IAM /introspect 验证任意 Bearer token"""
+    if not bearer_token:
         return None
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(
-                f"{IAM_URL}/iam/verify",
-                headers={"Authorization": f"Bearer {session_token}"},
+                f"{IAM_URL}/iam/introspect",
+                headers={"Authorization": f"Bearer {bearer_token}"},
                 timeout=5,
             )
-            if resp.status_code == 200:
-                return resp.json()
+            if resp.status_code == 200 and resp.json().get("active"):
+                data = resp.json()
+                log.info("令牌查验 | type=%s sub=%s perms=%s",
+                         data.get("token_type","?"),
+                         data.get("user_id") or data.get("agent_name","?"),
+                         data.get("permissions",[]))
+                return data
         except Exception:
             pass
     return None
@@ -162,16 +169,32 @@ async def _route_request(path: str, request: Request):
     route = ROUTES[matched]
     stripped = path[len(matched):] or "/"
 
-    # 2. 提取用户会话（来自请求头）
-    session_token = request.headers.get("authorization", "").replace("Bearer ", "")
-    user_info = await _verify_user_session(session_token) or {}
+    # 2. 提取令牌并统一查验（用户会话 或 Agent 令牌）
+    bearer_token = request.headers.get("authorization", "").replace("Bearer ", "")
+    token_info = await _introspect_token(bearer_token)
 
-    log.info("会话验证 | user=%s | role=%s | route=%s",
-             user_info.get("user_id", "unauthenticated"),
-             user_info.get("role", "none"), matched)
+    if token_info:
+        token_type = token_info.get("token_type", "user")
+        user_id = token_info.get("user_id") or token_info.get("owner", "unknown")
+        user_role = token_info.get("role") or token_info.get("owner_role", "agent")
+        user_perms = token_info.get("permissions", [])
 
-    # 3. 获取用户权限对应的 scope
-    user_perms = user_info.get("permissions", [])
+        # 3. 权限检查 — Agent 必须有对应权限
+        required = route.get("require_perm", "")
+        if required and required not in user_perms:
+            log.warning("权限不足 | type=%s sub=%s route=%s need=%s have=%s",
+                        token_type, user_id, matched, required, user_perms)
+            return Response(
+                content='{"error":"permission_denied",'
+                        f'"detail":"Agent 缺少 {required} 权限, 请联系管理员调整权限范围",'
+                        '"required_perm":"'+required+'"}',
+                status_code=403, media_type="application/json")
+
+        user_info = {"user_id": user_id, "name": token_info.get("name") or token_info.get("agent_name", user_id),
+                     "role": user_role, "dept": token_info.get("dept") or token_info.get("owner_dept", "")}
+    else:
+        user_info = {}
+        user_perms = []
     scope = route["scope"]
     # 检查用户是否有权限访问此 API
     perm_check = f"{route['audience']}:{'write' if 'write' in scope else 'read'}"

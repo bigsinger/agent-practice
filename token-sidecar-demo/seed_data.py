@@ -1,7 +1,7 @@
 """
 seed_data.py — 星辰科技 SQLite 数据库初始化
 ==============================================
-生成 12 人组织、订单、项目、薪资、安全日志的测试数据。
+生成 12 人组织、订单、项目、薪资、安全日志、Agent 注册表的测试数据。
 """
 import sqlite3, json, os, hashlib
 
@@ -129,10 +129,110 @@ def init():
     ]
     c.executemany("INSERT INTO security_logs VALUES(?,?,?,?,?,?,?)", logs)
 
+    # ====================================================================
+    # Agent IAM — Agent 注册表
+    # ====================================================================
+    c.execute("""CREATE TABLE agents (
+        id INTEGER PRIMARY KEY,
+        agent_name TEXT NOT NULL,
+        agent_type TEXT DEFAULT 'generic',
+        client_id TEXT UNIQUE NOT NULL,
+        client_secret_hash TEXT NOT NULL,
+        owner_username TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        allowed_perms TEXT,           -- JSON array of "perm" strings
+        created_at TEXT,
+        last_seen TEXT
+    )""")
+
+    # ROLES 定义（与 iam.py 保持一致）
+    ROLES = {
+        "admin":    {"emp:read":2,"emp:manage":2,"salary:read":2,"salary:manage":2,
+                     "order:read":2,"order:manage":2,"project:read":2,"project:manage":2,
+                     "log:read":2,"iam:admin":2,"soc:manage":2,"config:manage":2},
+        "engineer": {"emp:read":1,"emp:manage":0,"salary:read":0,"salary:manage":0,
+                     "order:read":1,"order:manage":0,"project:read":2,"project:manage":1,
+                     "log:read":0,"iam:admin":0,"soc:manage":0,"config:manage":0},
+        "finance":  {"emp:read":1,"emp:manage":0,"salary:read":2,"salary:manage":1,
+                     "order:read":2,"order:manage":2,"project:read":0,"project:manage":0,
+                     "log:read":0,"iam:admin":0,"soc:manage":0,"config:manage":0},
+        "operator": {"emp:read":1,"emp:manage":0,"salary:read":0,"salary:manage":0,
+                     "order:read":0,"order:manage":0,"project:read":1,"project:manage":0,
+                     "log:read":2,"iam:admin":0,"soc:manage":2,"config:manage":1},
+        "hr":       {"emp:read":2,"emp:manage":2,"salary:read":0,"salary:manage":0,
+                     "order:read":0,"order:manage":0,"project:read":0,"project:manage":0,
+                     "log:read":0,"iam:admin":0,"soc:manage":0,"config:manage":0},
+        "product":  {"emp:read":1,"emp:manage":0,"salary:read":0,"salary:manage":0,
+                     "order:read":1,"order:manage":0,"project:read":2,"project:manage":0,
+                     "log:read":0,"iam:admin":0,"soc:manage":0,"config:manage":0},
+    }
+
+    def full_perms(role: str) -> list:
+        """获取某角色的全量权限列表"""
+        return [k for k, v in ROLES[role].items() if v > 0]
+
+    def make_agent(aid, name, atype, owner, cid, pwd, status, perms):
+        return (aid, name, atype, cid, hash_pwd(pwd), owner, status,
+                json.dumps(perms), "2026-06-10 00:00:00", None)
+
+    agents = [
+        # ── 王总 (admin) — 2 agent ──
+        make_agent(1,"智能审批助手","oa","admin_wang","agent_wang_oa","sec_wang_oa123","active",
+                   full_perms("admin")),  # 全量权限
+        make_agent(2,"决策分析顾问","bi","admin_wang","agent_wang_bi","sec_wang_bi456","active",
+                   ["emp:read","order:read","project:read","salary:read"]),  # 仅查询类
+        # ── 李副总 (admin) — 1 agent ──
+        make_agent(3,"运营报告生成","report","admin_li","agent_li_rpt","sec_li_rpt789","active",
+                   ["emp:read","order:read","project:read","order:manage"]),
+        # ── 张工 (engineer) — 2 agent ──
+        make_agent(4,"代码审查助手","code","dev_zhang","agent_zhang_code","sec_zhang_code123","active",
+                   full_perms("engineer")),  # 工程全量
+        make_agent(5,"数据分析助手","data","dev_zhang","agent_zhang_data","sec_zhang_data456","active",
+                   ["project:read","order:read","emp:read"]),  # 只读查询
+        # ── 刘工 (engineer) — 1 agent ──
+        make_agent(6,"文档智能助手","doc","dev_liu","agent_liu_doc","sec_liu_doc789","active",
+                   ["project:read","emp:read"]),
+        # ── 陈工 (engineer) — 1 agent ──
+        make_agent(7,"测试自动化","qa","dev_chen","agent_chen_qa","sec_chen_qa123","active",
+                   ["project:read"]),  # 仅可看项目
+        # ── 赵工 (engineer, intern) — 1 agent ──
+        make_agent(8,"学习助手","edu","dev_zhao","agent_zhao_edu","sec_zhao_edu456","active",
+                   ["project:read"]),  # 实习生只有 project:read
+        # ── 吴会计 (finance) — 2 agent ──
+        make_agent(9,"账务处理机器人","finance","fin_wu","agent_wu_acct","sec_wu_acct789","active",
+                   full_perms("finance")),  # 财务全量
+        make_agent(10,"订单分析助手","bi","fin_wu","agent_wu_order","sec_wu_order123","active",
+                    ["order:read","order:manage"]),  # 仅订单
+        # ── 黄会计 (finance) — 1 agent ──
+        make_agent(11,"报销审核助手","finance","fin_huang","agent_huang_exp","sec_huang_exp456","active",
+                    ["order:read"]),  # 仅可看订单
+        # ── 周运维 (operator) — 2 agent ──
+        make_agent(12,"安全巡检机器人","secops","ops_zhou","agent_zhou_sec","sec_zhou_sec789","active",
+                    full_perms("operator")),  # 运维全量
+        make_agent(13,"告警通知推送","alert","ops_zhou","agent_zhou_alert","sec_zhou_alert123","active",
+                    ["log:read","soc:manage"]),  # 仅日志+安全
+        # ── 孙运维 (operator) — 1 agent ──
+        make_agent(14,"日志采集Agent","log","ops_sun","agent_sun_log","sec_sun_log456","active",
+                    ["log:read"]),  # 仅可读日志
+        # ── 许HR (hr) — 1 agent ──
+        make_agent(15,"简历筛选助手","hr","hr_xu","agent_xu_resume","sec_xu_resume789","active",
+                    full_perms("hr")),  # 人事全量
+        # ── 马产品 (product) — 1 agent ──
+        make_agent(16,"需求管理助手","product","prod_ma","agent_ma_req","sec_ma_req123","active",
+                    ["project:read","order:read"]),  # 仅查询
+
+        # ── 🚨 未授权 Agent（模拟违规发现）──
+        make_agent(17,"幽灵爬虫-7788","unknown","unknown","ghost_crawler","no_auth_xxx","pending",
+                    []),  # 未注册，状态 pending
+    ]
+
+    c.executemany("""INSERT INTO agents VALUES(?,?,?,?,?,?,?,?,?,?)""", agents)
+
     conn.commit(); conn.close()
     print(f"✅ 数据库已初始化: {DB}")
     print(f"   部门: {len(depts)} | 员工: {len(employees)} | 订单: {len(orders)}")
     print(f"   项目: {len(projects)} | 薪资: {len(salaries)} | 安全日志: {len(logs)}")
+    print(f"   Agent: {len(agents)-1} 已注册 + 1 未授权（共{len(agents)}）")
 
 if __name__ == "__main__":
     init()
